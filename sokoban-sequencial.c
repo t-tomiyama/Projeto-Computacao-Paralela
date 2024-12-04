@@ -395,12 +395,6 @@ void show_moves(const state_t *s, int nextPos)
 int main()
 {
 
-    // Variáveis para medir o tempo de execução
-    struct timeval start, stop;
-
-    // Inicia o tempo
-    gettimeofday(&start, NULL);
-
     // Substitua esta parte pelo seu tabuleiro como string
     const char *boardStr =
         "#######################\n"
@@ -413,6 +407,13 @@ int main()
         "#######################\n";
 
     printf("%s", boardStr);
+
+    // Variáveis para medir o tempo de execução
+    struct timeval start, stop;
+
+    // Inicia o tempo
+    gettimeofday(&start, NULL);
+
     // Para determinar a largura e altura do tabuleiro a partir da string
     w = 0;
     h = 0;

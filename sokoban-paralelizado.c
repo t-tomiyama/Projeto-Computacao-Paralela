@@ -10,8 +10,6 @@
 #include <sys/time.h>
 #include <math.h>
 
-#include <mpi.h>
-
 int w, h, n_boxes;             // largura (w), altura (h) e número de caixas (n_boxes)
 uint8_t *board, *goals, *live; // Ponteiros para o tabuleiro, metas e células "vivas"
 
@@ -93,8 +91,8 @@ void unnewstate(state_t *p)
 // Função para marcar células "vivas"
 void mark_live_iterative(const int start)
 {
-// Estratégia de pilha paralelizada mais eficiente para marcar células vivas
-#pragma omp parallel
+    // Estratégia de pilha paralelizada mais eficiente para marcar células vivas
+    // #pragma omp parallel
     {
         // Declara a pilha e o índice superior (top) para controle da pilha
         int stack[w * h];
@@ -194,9 +192,7 @@ state_t *parse_board(const char *s)
         {
             mark_live_iterative(i); // Marca as células vivas de forma iterativa
         }
-    }
-
-#pragma omp taskwait // Espera todas as tarefas paralelas terminarem
+    } // Espera todas as tarefas paralelas terminarem
 
     // Atribui as posições iniciais para o jogador e as caixas
     for (int i = 0, j = 0; i < w * h; i++)
@@ -443,21 +439,11 @@ void show_moves(const state_t *s, int nextPos)
     }
 }
 
-int main(int argc, char *argv[])
+int main()
 {
-    // Inicializa a biblioteca MPI
-    MPI_Init(&argc, &argv);
-    int rank, size;
-    // Obtém o "rank" (identificador) do processo atual no comunicador MPI
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    // Obtém o número total de processos no comunicador MPI
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     // Variáveis para medir o tempo de execução
     struct timeval start, stop;
-
-    // Inicia a medição do tempo
-    gettimeofday(&start, NULL);
 
     // Representação do tabuleiro como uma string
     const char *boardStr =
@@ -472,6 +458,9 @@ int main(int argc, char *argv[])
 
     // Imprime o tabuleiro no formato de string
     printf("%s\n", boardStr);
+
+    // Inicia a medição do tempo
+    gettimeofday(&start, NULL);
 
     // Determina a largura (w) e altura (h) do tabuleiro a partir da string
     w = 0;
@@ -542,9 +531,6 @@ int main(int argc, char *argv[])
          ((double)(start.tv_sec) * 1000.0 + (double)(start.tv_usec / 1000.0)));
     // Exibe o tempo total de execução
     fprintf(stdout, "Tempo total gasto = %g ms\n", tempo);
-
-    // Finaliza a biblioteca MPI
-    MPI_Finalize();
 
     return 0;
 }
