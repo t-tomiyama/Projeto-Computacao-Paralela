@@ -1,0 +1,24 @@
+{
+    "files.associations": {
+        "stdlib.h": "c",
+        "cstdint": "c",
+        "cstdlib": "c",
+        "unistd.h": "c",
+        "array": "c",
+        "deque": "c",
+        "string": "c",
+        "unordered_map": "c",
+        "vector": "c",
+        "string_view": "c",
+        "format": "c",
+        "initializer_list": "c",
+        "span": "c",
+        "text_encoding": "c",
+        "regex": "c",
+        "omp.h": "c",
+        "time.h": "c",
+        "stdbool.h": "c",
+        "math.h": "c",
+        "assert.h": "c"
+    }
+}

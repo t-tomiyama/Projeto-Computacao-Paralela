@@ -1,11 +1,3 @@
-/*
- * This code was based on Sokoban C available at
- * http://www.rosettacode.org/wiki/Sokoban#C
- * licenced under GNU Free Documentation License 1.2
- */
-
-// Houve uma leve adaptação para funcionar, com inline nao funcionava no nosso vscode e colocamos a string direto para não afetar no tempo
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,8 +6,11 @@
 #include <assert.h>
 #include <stdbool.h>
 
+#include <omp.h>
 #include <sys/time.h>
 #include <math.h>
+
+#include <mpi.h>
 
 int w, h, n_boxes;             // largura (w), altura (h) e número de caixas (n_boxes)
 uint8_t *board, *goals, *live; // Ponteiros para o tabuleiro, metas e células "vivas"
@@ -49,8 +44,6 @@ state_t *block_root, *block_head;   // Ponteiros para a raiz e cabeça do bloco 
 /*--------------------- Funções Principais ---------------------*/
 
 /*----------- Gerenciamento de Estados -----------*/
-
-bool queue_move(state_t *s);
 
 // Função que retorna o próximo estado alocado
 state_t *next_of(state_t *s)
@@ -96,75 +89,125 @@ void unnewstate(state_t *p)
 
 // Função para marcar posições onde uma caixa não deve estar
 // Marca as células no tabuleiro onde as caixas podem se mover (espaços "vivos"), considerando paredes e posições inválidas.
-void mark_live(const int c)
+
+// Função para marcar células "vivas"
+void mark_live_iterative(const int start)
 {
-    const int y = c / w, x = c % w;
-    if (live[c]) // Se já foi marcada como "viva", retorna
-        return;
+// Estratégia de pilha paralelizada mais eficiente para marcar células vivas
+#pragma omp parallel
+    {
+        // Declara a pilha e o índice superior (top) para controle da pilha
+        int stack[w * h];
+        int top = -1;
 
-    live[c] = 1; // Marca como "viva"
-    if (y > 1 && board[c - w] != wall && board[c - w * 2] != wall)
-        mark_live(c - w); // Marca célula acima
-    if (y < h - 2 && board[c + w] != wall && board[c + w * 2] != wall)
-        mark_live(c + w); // Marca célula abaixo
-    if (x > 1 && board[c - 1] != wall && board[c - 2] != wall)
-        mark_live(c - 1); // Marca célula à esquerda
-    if (x < w - 2 && board[c + 1] != wall && board[c + 2] != wall)
-        mark_live(c + 1); // Marca célula à direita
+        // Adiciona o ponto inicial à pilha
+        stack[++top] = start;
+
+        // Enquanto houver elementos na pilha
+        while (top >= 0)
+        {
+            // Retira o último elemento da pilha (última célula a ser processada)
+            int c = stack[top--];
+
+            // Calcula as coordenadas (y, x) a partir do índice linear c
+            const int y = c / w, x = c % w;
+
+            // Se a célula já foi marcada como viva, ignora esta iteração
+            if (live[c])
+                continue;
+
+// Marca a célula atual como viva
+#pragma omp atomic write
+            live[c] = 1;
+
+            // Verifica as células vizinhas e as adiciona à pilha, se possível
+            // Verificação para célula acima (y > 1 para evitar índice fora do limite superior)
+            if (y > 1 && board[c - w] != wall && board[c - w * 2] != wall)
+                stack[++top] = c - w; // Adiciona a célula acima à pilha, se não for parede
+
+            // Verificação para célula abaixo (y < h - 2 para evitar índice fora do limite inferior)
+            if (y < h - 2 && board[c + w] != wall && board[c + w * 2] != wall)
+                stack[++top] = c + w; // Adiciona a célula abaixo à pilha, se não for parede
+
+            // Verificação para célula à esquerda (x > 1 para evitar índice fora do limite esquerdo)
+            if (x > 1 && board[c - 1] != wall && board[c - 2] != wall)
+                stack[++top] = c - 1; // Adiciona a célula à esquerda à pilha, se não for parede
+
+            // Verificação para célula à direita (x < w - 2 para evitar índice fora do limite direito)
+            if (x < w - 2 && board[c + 1] != wall && board[c + 2] != wall)
+                stack[++top] = c + 1; // Adiciona a célula à direita à pilha, se não for parede
+        }
+    }
 }
-
 // Função para fazer o parsing do tabuleiro a partir de uma string e define as posições iniciais do jogador e das caixas.
 state_t *parse_board(const char *s)
 {
-    board = calloc(w * h, sizeof(uint8_t)); // Aloca o tabuleiro
-    assert(board);
-    goals = calloc(w * h, sizeof(uint8_t)); // Aloca as metas
-    assert(goals);
-    live = calloc(w * h, sizeof(uint8_t)); // Aloca as células "vivas"
-    assert(live);
+    // Aloca memória para o tabuleiro (w * h células de tamanho uint8_t)
+    board = calloc(w * h, sizeof(uint8_t));
+    assert(board); // Verifica se a alocação foi bem-sucedida
 
-    n_boxes = 0;
+    // Aloca memória para as células de objetivo (goals) (w * h células de tamanho uint8_t)
+    goals = calloc(w * h, sizeof(uint8_t));
+    assert(goals); // Verifica se a alocação foi bem-sucedida
 
-    for (int i = 0; s[i]; i++) // Itera sobre a string de entrada
+    // Aloca memória para as células vivas (live) (w * h células de tamanho uint8_t)
+    live = calloc(w * h, sizeof(uint8_t));
+    assert(live); // Verifica se a alocação foi bem-sucedida
+
+    n_boxes = 0; // Inicializa a contagem de caixas
+
+    // Loop para analisar a string que representa o tabuleiro
+    for (int i = 0; s[i]; i++)
     {
-        switch (s[i])
+        switch (s[i]) // Ação baseada no caractere da string
         {
-        case '#':
-            board[i] = wall; // Se for uma parede
-            continue;
-
-        case '.':         // Meta vazia
-        case '+':         // Meta com jogador
-            goals[i] = 1; // Marca como meta
-        case '@':         // Jogador
-            continue;
-
-        case '*':         // Caixa na meta
-            goals[i] = 1; // Marca como meta
-        case '$':         // Caixa
-            n_boxes++;    // Conta o número de caixas
-            continue;
-        default:
+        case '#':            // Se o caractere for '#', marca a célula como parede
+            board[i] = wall; // Marca a célula como parede
+            continue;        // Continua para o próximo caractere
+        case '.':            // Se o caractere for '.', marca a célula como objetivo
+        case '+':            // Se o caractere for '+', marca o jogador sobre um objetivo
+            goals[i] = 1;    // Marca a célula como objetivo
+        case '@':            // Se o caractere for '@', marca o jogador
+            continue;        // Continua para o próximo caractere
+        case '*':            // Se o caractere for '*', marca a célula como caixa sobre um objetivo
+            goals[i] = 1;    // Marca a célula como objetivo
+        case '$':            // Se o caractere for '$', marca a célula como caixa
+            n_boxes++;       // Incrementa o número de caixas
+            continue;        // Continua para o próximo caractere
+        default:             // Se o caractere for desconhecido, continua para o próximo
             continue;
         }
     }
 
-    const int is = sizeof(int);
-    state_size = (sizeof(state_t) + (1 + n_boxes) * sizeof(cidx_t) + is - 1) /
-                 is * is; // Calcula o tamanho do estado, alinhado
+    // Alinha o tamanho do estado, considerando a quantidade de caixas
+    const int is = sizeof(int);                                                         // Tamanho de um int
+    state_size = (sizeof(state_t) + (1 + n_boxes) * sizeof(cidx_t) + is - 1) / is * is; // Ajuste de alinhamento de tamanho
 
-    state_t *state = newstate(NULL); // Cria o estado inicial
+    // Cria o estado inicial usando a função newstate
+    state_t *state = newstate(NULL);
 
-    for (int i = 0, j = 0; i < w * h; i++)
+// Parâmetros de execução paralela para marcar as células vivas
+#pragma omp parallel for
+    for (int i = 0; i < w * h; i++)
     {
-        if (goals[i])
-            mark_live(i); // Marca as células vivas nas metas
-        if (s[i] == '$' || s[i] == '*')
-            state->c[++j] = i; // Marca a posição das caixas
-        else if (s[i] == '@' || s[i] == '+')
-            state->c[0] = i; // Marca a posição do jogador
+        if (goals[i]) // Se for uma célula de objetivo
+        {
+            mark_live_iterative(i); // Marca as células vivas de forma iterativa
+        }
     }
 
+#pragma omp taskwait // Espera todas as tarefas paralelas terminarem
+
+    // Atribui as posições iniciais para o jogador e as caixas
+    for (int i = 0, j = 0; i < w * h; i++)
+    {
+        if (s[i] == '$' || s[i] == '*')
+            state->c[++j] = i; // Adiciona a posição da caixa
+        else if (s[i] == '@' || s[i] == '+')
+            state->c[0] = i; // Adiciona a posição do jogador
+    }
+
+    // Retorna o estado inicial
     return state;
 }
 
@@ -191,12 +234,11 @@ hash_t hash_size, fill_limit, filled;
 void extend_table()
 {
     int old_size = hash_size;
-
     if (!old_size)
     {
         hash_size = 1024;
         filled = 0;
-        fill_limit = hash_size * 3 / 4; // Limite de 75% de ocupação
+        fill_limit = hash_size * 3 / 4;
     }
     else
     {
@@ -204,26 +246,30 @@ void extend_table()
         fill_limit *= 2;
     }
 
-    buckets = realloc(buckets, sizeof(state_t *) * hash_size); // Realoca a tabela de hash
-    assert(buckets);
-
-    // Recalcula o hash
-    memset(buckets + old_size, 0, sizeof(state_t *) * (hash_size - old_size));
+    state_t **new_buckets = calloc(hash_size, sizeof(state_t *));
+    assert(new_buckets);
 
     const hash_t bits = hash_size - 1;
+
+#pragma omp parallel for
     for (int i = 0; i < old_size; i++)
     {
         state_t *head = buckets[i];
-        buckets[i] = NULL;
         while (head)
         {
             state_t *next = head->next;
-            const int j = head->h & bits; // Calcula o novo índice na tabela de hash
-            head->next = buckets[j];
-            buckets[j] = head;
+            const int j = head->h & bits;
+#pragma omp atomic capture
+            {
+                head->next = new_buckets[j];
+                new_buckets[j] = head;
+            }
             head = next;
         }
     }
+
+    free(buckets);
+    buckets = new_buckets;
 }
 
 // Função para procurar um estado na tabela de hash, verifica se um estado já foi explorado usando a tabela hash
@@ -231,6 +277,9 @@ state_t *lookup(state_t *s)
 {
     hash(s); // Calcula o hash do estado
     state_t *f = buckets[s->h & (hash_size - 1)];
+
+    // Nesse caso, para paralelizar, necessitaria criar uma estrutura a mais para poder realizar o processo em paralelo, além de funções de leitura
+    // que no caso para esse teste pequeno, não seria muito eficiente, ou a melhoria de performance seria minima, não compensando a memória extra necessária
     for (; f; f = f->next)
     {
         if (                                                     //(f->h == s->h) &&
@@ -363,13 +412,15 @@ bool do_move(state_t *s)
 void show_moves(const state_t *s, int nextPos)
 {
 
-    if (s->prev)
+    if (s->prev)                      // Se houver um estado anterior, chama a função recursivamente para exibir os movimentos anteriores
         show_moves(s->prev, s->c[0]); // Exibe os movimentos recursivamente
-    if (nextPos == -1)
+    if (nextPos == -1)                // Calcula as coordenadas do estado atual (cx, cy) e do próximo movimento (nx, ny)
     {
         printf("\n");
         return;
     }
+
+    // Calcula as coordenadas do estado atual (cx, cy) e do próximo movimento (nx, ny)
     int cx = s->c[0] % w;
     int cy = s->c[0] / w;
     int nx = nextPos % w;
@@ -392,16 +443,23 @@ void show_moves(const state_t *s, int nextPos)
     }
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    // Inicializa a biblioteca MPI
+    MPI_Init(&argc, &argv);
+    int rank, size;
+    // Obtém o "rank" (identificador) do processo atual no comunicador MPI
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    // Obtém o número total de processos no comunicador MPI
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     // Variáveis para medir o tempo de execução
     struct timeval start, stop;
 
-    // Inicia o tempo
+    // Inicia a medição do tempo
     gettimeofday(&start, NULL);
 
-    // Substitua esta parte pelo seu tabuleiro como string
+    // Representação do tabuleiro como uma string
     const char *boardStr =
         "#######################\n"
         "#. #####......##...####\n"
@@ -412,64 +470,81 @@ int main()
         "#.#. #.#             @#\n"
         "#######################\n";
 
-    printf("%s", boardStr);
-    // Para determinar a largura e altura do tabuleiro a partir da string
+    // Imprime o tabuleiro no formato de string
+    printf("%s\n", boardStr);
+
+    // Determina a largura (w) e altura (h) do tabuleiro a partir da string
     w = 0;
     h = 0;
     for (int i = 0; boardStr[i] != '\0'; i++)
     {
+        // Conta o número de linhas no tabuleiro (indicados por '\n')
         if (boardStr[i] == '\n')
         {
-            h++; // Incrementa a altura ao encontrar um '\n'
+            h++; // Incrementa a altura
         }
+        // Conta o número de caracteres na primeira linha (largura do tabuleiro)
         else if (h == 0)
         {
             w++; // Incrementa a largura apenas na primeira linha
         }
     }
-    w++;
+    w++; // A largura deve ser incrementada por causa do caractere '\0' no final
 
-    state_t *s = parse_board(boardStr); // Parse the given board string
+    // Faz o parsing da string para o estado inicial do tabuleiro
+    state_t *s = parse_board(boardStr);
     printf("Tamanho do mapa: %d x %d\n", w, h);
 
-    extend_table(); // Expand the hash table if necessary
-    queue_move(s);  // Add the initial state to the queue
+    // Expande a tabela de hash se necessário
+    extend_table();
+    // Adiciona o estado inicial à fila de movimentos
+    queue_move(s);
 
-    while (!done) // While the game is not solved
+    // Enquanto o jogo não for resolvido, continua tentando encontrar a solução
+    while (!done) // Enquanto não tiver terminado
     {
         state_t *head = next_level;
+        // Itera sobre os estados na próxima camada
         for (next_level = NULL; head && !done; head = head->qnext)
-            do_move(head); // Perform moves
+            do_move(head); // Realiza um movimento no estado atual
 
+        // Se não houver mais estados para explorar, significa que não há solução
         if (!next_level)
         {
-            puts("sem solução?");
-            return 1; // If no solution found, exit the program
+            puts("Sem solução");
+            return 1; // Retorna com erro se não houver solução
         }
     }
 
+    // Imprime os movimentos que levaram à solução
     printf("\nMovimentos: \n");
-    show_moves(done, -1); // Show the sequence of moves that lead to the solution
+    show_moves(done, -1); // Mostra a sequência de movimentos
 
-    // Free allocated memory
-    free(buckets);
-    free(board);
-    free(goals);
-    free(live);
+    // Libera a memória alocada para as estruturas de dados
+    free(buckets); // Libera a tabela de hash
+    free(board);   // Libera o tabuleiro
+    free(goals);   // Libera os objetivos
+    free(live);    // Libera a lista de estados vivos
 
+    // Libera a memória de blocos encadeados
     while (block_root)
     {
         void *tmp = block_root->next;
-        free(block_root);
-        block_root = tmp;
+        free(block_root); // Libera o bloco atual
+        block_root = tmp; // Avança para o próximo bloco
     }
 
-    // Output total execution time
+    // Finaliza a medição do tempo
     gettimeofday(&stop, NULL);
+    // Calcula o tempo total gasto em milissegundos
     double tempo =
         (((double)(stop.tv_sec) * 1000.0 + (double)(stop.tv_usec / 1000.0)) -
          ((double)(start.tv_sec) * 1000.0 + (double)(start.tv_usec / 1000.0)));
+    // Exibe o tempo total de execução
     fprintf(stdout, "Tempo total gasto = %g ms\n", tempo);
+
+    // Finaliza a biblioteca MPI
+    MPI_Finalize();
 
     return 0;
 }
